@@ -580,6 +580,7 @@ func (r *OVNControllerReconciler) generateExternalConfigMaps(
 	}
 
 	externalTemplateParameters := make(map[string]interface{})
+	// TODO change externalEndpoint to DNS
 	externalTemplateParameters["OvnRemote"] = externalEndpoint
 	externalTemplateParameters["OvnEncapType"] = instance.Spec.ExternalIDS.OvnEncapType
 

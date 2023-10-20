@@ -200,5 +200,8 @@ func (instance OVNDBCluster) GetExternalEndpoint() (string, error) {
 	if instance.Status.DBAddress == "" {
 		return "", fmt.Errorf("external DBEndpoint not ready yet for %s", instance.Spec.DBType)
 	}
-	return instance.Status.DBAddress, nil
+	//return instance.Status.DBAddress, nil
+	//return "tcp:ovsdbserver-sb.openstack.svc:6642", nil
+	dns_hostname := "tcp:ovsdbserver-sb." + instance.Namespace + ".svc:6642"
+	return dns_hostname, nil
 }

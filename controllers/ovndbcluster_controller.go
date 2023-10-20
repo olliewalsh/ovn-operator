@@ -22,6 +22,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -29,7 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/go-logr/logr"
+	infranetworkv1 "github.com/openstack-k8s-operators/infra-operator/apis/network/v1beta1"
 	"github.com/openstack-k8s-operators/lib-common/modules/common"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/condition"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/configmap"
@@ -519,6 +521,10 @@ func (r *OVNDBClusterReconciler) reconcileServices(
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	// averdagu I don't think it's needed, maybe will delete later
+	headlesssvc.AddAnnotation(map[string]string{
+		service.AnnotationHostnameKey: headlesssvc.GetServiceHostname(),
+	})
 
 	ctrlResult, err := headlesssvc.CreateOrPatch(ctx, helper)
 	if err != nil {
@@ -548,6 +554,9 @@ func (r *OVNDBClusterReconciler) reconcileServices(
 		if err != nil {
 			return ctrl.Result{}, err
 		}
+		svc.AddAnnotation(map[string]string{
+			service.AnnotationHostnameKey: svc.GetServiceHostname(),
+		})
 		ctrlResult, err := svc.CreateOrPatch(ctx, helper)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -557,6 +566,7 @@ func (r *OVNDBClusterReconciler) reconcileServices(
 		// create service - end
 	}
 
+	// TODO: Delete also DNS info if exists
 	// Delete any extra services left after scale down
 	svcList, err := service.GetServicesListWithLabel(
 		ctx,
@@ -581,6 +591,84 @@ func (r *OVNDBClusterReconciler) reconcileServices(
 			}
 		}
 	}
+
+	Log.Info("DNS Starts here")
+	Log.Info(fmt.Sprintf("AAA - Using instance: %v", instance))
+	Log.Info(fmt.Sprintf("AAA - Using instance.spec: %v", instance.Spec))
+	serviceName = ovndbcluster.ServiceNameSB
+	if instance.Spec.DBType == v1beta1.NBDBType {
+		serviceName = ovndbcluster.ServiceNameNB
+	}
+	serviceLabels = map[string]string{
+		common.AppSelector: serviceName,
+	}
+	podList, err = ovndbcluster.OVNDBPods(ctx, instance, helper, serviceLabels)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	for _, ovnPod := range podList.Items {
+		Log.Info(fmt.Sprintf("Using Pod: %v", ovnPod.Name))
+		var dnsName string
+		var dnsIP string
+		var hostnames []string
+		dnsName = "dns-" + ovnPod.Name
+		// Get Hostname
+		svc, _ := service.GetServiceWithName(
+			ctx,
+			helper,
+			ovnPod.Name,
+			ovnPod.Namespace,
+		)
+		hostname := svc.ObjectMeta.Annotations[infranetworkv1.AnnotationHostnameKey]
+		hostnames = append(hostnames, hostname)
+
+		// Get IP
+		net_stat, _ := nad.GetNetworkStatusFromAnnotation(ovnPod.Annotations)
+		for _, v := range net_stat {
+			if v.Interface == instance.Spec.NetworkAttachment {
+				dnsIP = v.IPs[0]
+			}
+		}
+
+		// Create DNSRecord
+		var DNSRecords []infranetworkv1.DNSHost
+		// ovsdbserver-sb-x entry
+		DNSRecord := infranetworkv1.DNSHost{}
+		DNSRecord.IP = dnsIP
+		DNSRecord.Hostnames = hostnames
+		// ovsdbserver-sb entry
+		headless_dns_hostname := ovndbcluster.ServiceNameSB + "." + instance.Namespace + ".svc"
+		if instance.Spec.DBType == v1beta1.NBDBType {
+			headless_dns_hostname = ovndbcluster.ServiceNameNB + "." + instance.Namespace + ".svc"
+		}
+		DNSRecordCname := infranetworkv1.DNSHost{}
+		DNSRecordCname.IP = dnsIP
+		DNSRecordCname.Hostnames = append(DNSRecordCname.Hostnames, headless_dns_hostname)
+		DNSRecords = append(DNSRecords, DNSRecord)
+		DNSRecords = append(DNSRecords, DNSRecordCname)
+
+		// Create DNSData
+		DNSData := &infranetworkv1.DNSData{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      dnsName,
+				Namespace: ovnPod.Namespace,
+			},
+		}
+		_, err := controllerutil.CreateOrPatch(ctx, helper.GetClient(), DNSData, func() error {
+			DNSData.Spec.Hosts = DNSRecords
+			DNSData.Spec.DNSDataLabelSelectorValue = "dnsdata"
+			err := controllerutil.SetControllerReference(helper.GetBeforeObject(), DNSData, helper.GetScheme())
+			if err != nil {
+				Log.Info(fmt.Sprintf("Inside CreateOrPatch error: %v", err))
+			}
+			return err
+		})
+		if err != nil {
+			Log.Info(fmt.Sprintf("Outside CreateOrPatch error: %v", err))
+		}
+
+	}
+
 	Log.Info("Reconciled OVN DB Cluster Service successfully")
 	return ctrl.Result{}, nil
 }
