@@ -275,6 +275,8 @@ func (r *OVNControllerReconciler) reconcileNormal(ctx context.Context, instance 
 
 	instance.Status.Conditions.MarkTrue(condition.InputReadyCondition, condition.InputReadyMessage)
 
+	// TODO(owalsh): handle OVN-controller TLS cert/key
+
 	//
 	// create Configmap required for OVNController input
 	// - %-scripts configmap holding scripts to e.g. bootstrap the service

@@ -297,6 +297,8 @@ func (r *OVNNorthdReconciler) reconcileNormal(ctx context.Context, instance *ovn
 			instance.Spec.NetworkAttachment, err)
 	}
 
+	// TODO(owalsh): handle OVN dbs TLS cert/key
+
 	// Handle service update
 	ctrlResult, err := r.reconcileUpdate(ctx, instance, helper)
 	if err != nil {
