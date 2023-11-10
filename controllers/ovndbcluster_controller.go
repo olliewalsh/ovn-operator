@@ -24,12 +24,14 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/go-logr/logr"
+	"github.com/openstack-k8s-operators/lib-common/modules/certmanager"
 	"github.com/openstack-k8s-operators/lib-common/modules/common"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/condition"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/configmap"
@@ -38,8 +40,10 @@ import (
 	"github.com/openstack-k8s-operators/lib-common/modules/common/labels"
 	nad "github.com/openstack-k8s-operators/lib-common/modules/common/networkattachment"
 	common_rbac "github.com/openstack-k8s-operators/lib-common/modules/common/rbac"
+	"github.com/openstack-k8s-operators/lib-common/modules/common/secret"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/service"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/statefulset"
+	"github.com/openstack-k8s-operators/lib-common/modules/common/tls"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/util"
 	"github.com/openstack-k8s-operators/ovn-operator/api/v1beta1"
 	ovnv1 "github.com/openstack-k8s-operators/ovn-operator/api/v1beta1"
@@ -48,6 +52,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	k8s_errors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // OVNDBClusterReconciler reconciles a OVNDBCluster object
@@ -81,10 +86,13 @@ func (r *OVNDBClusterReconciler) GetLogger(ctx context.Context) logr.Logger {
 //+kubebuilder:rbac:groups=ovn.openstack.org,resources=ovndbclusters/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=ovn.openstack.org,resources=ovndbclusters/finalizers,verbs=update
 //+kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete;
+//+kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch;delete;
 //+kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;patch;update;delete;
 //+kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;patch;update;delete;
 //+kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;
 //+kubebuilder:rbac:groups=k8s.cni.cncf.io,resources=network-attachment-definitions,verbs=get;list;watch
+//+kubebuilder:rbac:groups=cert-manager.io,resources=issuers,verbs=get;list;watch
+//+kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete;
 
 // service account, role, rolebinding
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update
@@ -372,9 +380,137 @@ func (r *OVNDBClusterReconciler) reconcileNormal(ctx context.Context, instance *
 	} else if (ctrlResult != ctrl.Result{}) {
 		return ctrlResult, nil
 	}
+
+	// Handle OVN dbs TLS cert/key
+	tlsDeploymentResources := &tls.DeploymentResources{
+		Volumes: []tls.Volume{},
+	}
+
+	if instance.Spec.TLS != nil && instance.Spec.TLS.Service != nil {
+		// generate certificate
+		if instance.Spec.TLS.Service.IssuerName != nil {
+			serviceName := ovndbcluster.ServiceNameNB
+			if instance.Spec.DBType == v1beta1.SBDBType {
+				serviceName = ovndbcluster.ServiceNameSB
+			}
+			certRequest := certmanager.CertificateRequest{
+				IssuerName:  *instance.Spec.TLS.Service.IssuerName,
+				CertName:    fmt.Sprintf("%s-svc", instance.Name),
+				Duration:    nil,
+				Hostnames:   []string{fmt.Sprintf("%s.%s.svc", serviceName, instance.Namespace)},
+				Ips:         nil,
+				Annotations: map[string]string{},
+				Labels:      serviceLabels,
+				Usages:      nil,
+			}
+			certSecret, ctrlResult, err := certmanager.EnsureCert(
+				ctx,
+				helper,
+				certRequest)
+			if err != nil {
+				return ctrlResult, err
+			} else if (ctrlResult != ctrl.Result{}) {
+				return ctrlResult, nil
+			}
+
+			values := [][]byte{}
+			if certSecret != nil {
+				for _, field := range []string{"tls.key", "tls.crt"} {
+					val, ok := certSecret.Data[field]
+					if !ok {
+						return ctrl.Result{}, fmt.Errorf("field %s not found in Secret %s", field, certSecret.Name)
+					}
+					values = append(values, val)
+				}
+			}
+
+			hash, err := util.ObjectHash(values)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+
+			// add endpoint cert to deployment resources
+			tlsDeploymentResources.Volumes = append(
+				tlsDeploymentResources.Volumes,
+				tls.Volume{
+					IsCA: false,
+					Hash: hash,
+					Volume: corev1.Volume{
+						Name: fmt.Sprintf("tls-certs-%s", instance.Name),
+						VolumeSource: corev1.VolumeSource{
+							Secret: &corev1.SecretVolumeSource{
+								SecretName:  certSecret.Name,
+								DefaultMode: ptr.To[int32](0440),
+							},
+						},
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{
+							Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
+							MountPath: "/etc/pki/tls/certs/ovn_dbs.crt",
+							SubPath:   "tls.crt",
+							ReadOnly:  true,
+						},
+						{
+							Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
+							MountPath: "/etc/pki/tls/private/ovn_dbs.key",
+							SubPath:   "tls.key",
+							ReadOnly:  true,
+						},
+					},
+				},
+			)
+		}
+	}
+
+	// add CA cert to deployment resources
+	if instance.Spec.TLS != nil && instance.Spec.TLS.Ca != nil && instance.Spec.TLS.Ca.CaSecretName != "" {
+		// verify that the ca secret is there
+		hash, ctrlResult, err := secret.VerifySecret(
+			ctx,
+			types.NamespacedName{
+				Name:      instance.Spec.TLS.Ca.CaSecretName,
+				Namespace: instance.Namespace,
+			},
+			[]string{"ca.crt"},
+			helper.GetClient(),
+			5*time.Second,
+		)
+		if err != nil {
+			return ctrlResult, err
+		} else if (ctrlResult != ctrl.Result{}) {
+			return ctrlResult, nil
+		}
+
+		tlsDeploymentResources.Volumes = append(
+			tlsDeploymentResources.Volumes,
+			tls.Volume{
+				Hash: hash,
+				IsCA: false,
+				Volume: corev1.Volume{
+					Name: "ca-certs",
+					VolumeSource: corev1.VolumeSource{
+						Secret: &corev1.SecretVolumeSource{
+							SecretName:  instance.Spec.TLS.Ca.CaSecretName,
+							DefaultMode: ptr.To[int32](0444),
+						},
+					},
+				},
+				VolumeMounts: []corev1.VolumeMount{
+					{
+						Name:      "ca-certs",
+						MountPath: "/etc/pki/tls/certs/ovn_dbs_ca.crt",
+						SubPath:   "ca.crt",
+						ReadOnly:  true,
+					},
+				},
+			},
+		)
+	}
+
 	// Define a new Statefulset object
 	sfset := statefulset.NewStatefulSet(
-		ovndbcluster.StatefulSet(instance, inputHash, serviceLabels, serviceAnnotations),
+		ovndbcluster.StatefulSet(instance, inputHash, serviceLabels, serviceAnnotations, tlsDeploymentResources),
 		time.Duration(5)*time.Second,
 	)
 
@@ -462,6 +598,10 @@ func (r *OVNDBClusterReconciler) reconcileNormal(ctx context.Context, instance *
 		internalDbAddress := []string{}
 		raftAddress := []string{}
 		var svcPort int32
+		scheme := "tcp"
+		if instance.Spec.TLS != nil {
+			scheme = "ssl"
+		}
 		for _, svc := range svcList.Items {
 			svcPort = svc.Spec.Ports[0].Port
 
@@ -470,9 +610,8 @@ func (r *OVNDBClusterReconciler) reconcileNormal(ctx context.Context, instance *
 				// Test using hostname instead of ip for dbAddress connection
 				//serviceHostname := fmt.Sprintf("%s.%s.svc", svc.Name, svc.GetNamespace())
 				//dbAddress = append(dbAddress, fmt.Sprintf("tcp:%s:%d", serviceHostname, svc.Spec.Ports[0].Port))
-
-				internalDbAddress = append(internalDbAddress, fmt.Sprintf("tcp:%s:%d", svc.Spec.ClusterIP, svcPort))
-				raftAddress = append(raftAddress, fmt.Sprintf("tcp:%s:%d", svc.Spec.ClusterIP, svc.Spec.Ports[1].Port))
+				internalDbAddress = append(internalDbAddress, fmt.Sprintf("%s:%s:%d", scheme, svc.Spec.ClusterIP, svcPort))
+				raftAddress = append(raftAddress, fmt.Sprintf("%s:%s:%d", scheme, svc.Spec.ClusterIP, svc.Spec.Ports[1].Port))
 			}
 		}
 
@@ -481,7 +620,7 @@ func (r *OVNDBClusterReconciler) reconcileNormal(ctx context.Context, instance *
 			net := instance.Namespace + "/" + instance.Spec.NetworkAttachment
 			if netStat, ok := instance.Status.NetworkAttachments[net]; ok {
 				for _, instanceIP := range netStat {
-					dbAddress = append(dbAddress, fmt.Sprintf("tcp:%s:%d", instanceIP, svcPort))
+					dbAddress = append(dbAddress, fmt.Sprintf("%s:%s:%d", scheme, instanceIP, svcPort))
 				}
 			}
 		}
@@ -610,6 +749,7 @@ func (r *OVNDBClusterReconciler) generateServiceConfigMaps(
 	templateParameters["OVN_ELECTION_TIMER"] = instance.Spec.ElectionTimer
 	templateParameters["OVN_INACTIVITY_PROBE"] = instance.Spec.InactivityProbe
 	templateParameters["OVN_PROBE_INTERVAL_TO_ACTIVE"] = instance.Spec.ProbeIntervalToActive
+	templateParameters["TLS"] = instance.Spec.TLS != nil
 	cms := []util.Template{
 		// ScriptsConfigMap
 		{

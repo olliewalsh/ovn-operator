@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/openstack-k8s-operators/lib-common/modules/common/condition"
+	"github.com/openstack-k8s-operators/lib-common/modules/common/tls"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -105,6 +106,10 @@ type OVNDBClusterSpec struct {
 	// NetworkAttachment is a NetworkAttachment resource name to expose the service to the given network.
 	// If specified the IP address of this network is used as the dbAddress connection.
 	NetworkAttachment string `json:"networkAttachment"`
+
+	// +kubebuilder:validation:Optional
+	// TLS - Parameters related to the TLS
+	TLS *tls.TLS `json:"tls,omitempty"`
 }
 
 // OVNDBclusterDebug defines the observed state of OVNDBClusterDebug

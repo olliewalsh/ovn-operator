@@ -16,6 +16,11 @@
 set -ex
 DB_TYPE="{{ .DB_TYPE }}"
 DB_PORT="{{ .DB_PORT }}"
+{{- if .TLS }}
+DB_SCHEME="pssl"
+{{- else }}
+DB_SCHEME="ptcp"
+{{- end }}
 
 exec 1>/proc/1/fd/1 2>&1
 
@@ -26,7 +31,7 @@ if [[ "$(hostname)" == "{{ .SERVICE_NAME }}-0" ]]; then
     done
 
     while [ "$(ovn-${DB_TYPE}ctl --no-leader-only get connection . inactivity_probe)" != "{{ .OVN_INACTIVITY_PROBE }}" ]; do
-        ovn-${DB_TYPE}ctl --no-leader-only --inactivity-probe={{ .OVN_INACTIVITY_PROBE }} set-connection ptcp:${DB_PORT}:0.0.0.0
+        ovn-${DB_TYPE}ctl --no-leader-only --inactivity-probe={{ .OVN_INACTIVITY_PROBE }} set-connection ${DB_SCHEME}:${DB_PORT}:0.0.0.0
     done
     ovn-${DB_TYPE}ctl --no-leader-only list connection
 fi

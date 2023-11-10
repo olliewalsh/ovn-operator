@@ -16,6 +16,7 @@ import (
 	"github.com/openstack-k8s-operators/lib-common/modules/common"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/affinity"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/env"
+	"github.com/openstack-k8s-operators/lib-common/modules/common/tls"
 	"github.com/openstack-k8s-operators/ovn-operator/api/v1beta1"
 	ovnv1 "github.com/openstack-k8s-operators/ovn-operator/api/v1beta1"
 
@@ -39,6 +40,7 @@ func StatefulSet(
 	configHash string,
 	labels map[string]string,
 	annotations map[string]string,
+	tlsDeploymentResources *tls.DeploymentResources,
 ) *appsv1.StatefulSet {
 	runAsUser := int64(0)
 
@@ -109,6 +111,16 @@ func StatefulSet(
 	if instance.Spec.DBType == v1beta1.SBDBType {
 		serviceName = ServiceNameSB
 	}
+
+	// create Volume and VolumeMounts
+	volumes := GetDBClusterVolumes(instance.Name)
+	volumeMounts := GetDBClusterVolumeMounts(instance.Name + PvcSuffixEtcOvn)
+
+	if tlsDeploymentResources != nil {
+		volumes = append(volumes, tlsDeploymentResources.GetVolumes(false)...)
+		volumeMounts = append(volumeMounts, tlsDeploymentResources.GetVolumeMounts(false)...)
+	}
+
 	envVars := map[string]env.Setter{}
 	envVars["KOLLA_CONFIG_STRATEGY"] = env.SetValue("COPY_ALWAYS")
 	envVars["CONFIG_HASH"] = env.SetValue(configHash)
@@ -145,7 +157,7 @@ func StatefulSet(
 								RunAsUser: &runAsUser,
 							},
 							Env:                      env.MergeEnvs([]corev1.EnvVar{}, envVars),
-							VolumeMounts:             GetDBClusterVolumeMounts(instance.Name + PvcSuffixEtcOvn),
+							VolumeMounts:             volumeMounts,
 							Resources:                instance.Spec.Resources,
 							ReadinessProbe:           readinessProbe,
 							LivenessProbe:            livenessProbe,
@@ -153,6 +165,7 @@ func StatefulSet(
 							TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
 						},
 					},
+					Volumes: volumes,
 				},
 			},
 		},
@@ -189,7 +202,6 @@ func StatefulSet(
 			},
 		},
 	}
-	statefulset.Spec.Template.Spec.Volumes = GetDBClusterVolumes(instance.Name)
 	// If possible two pods of the same service should not
 	// run on the same worker node. If this is not possible
 	// the get still created on the same worker node.
