@@ -18,6 +18,7 @@ import (
 	"github.com/openstack-k8s-operators/lib-common/modules/common"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/affinity"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/env"
+	"github.com/openstack-k8s-operators/lib-common/modules/common/tls"
 	ovnv1 "github.com/openstack-k8s-operators/ovn-operator/api/v1beta1"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -37,6 +38,7 @@ func Deployment(
 	annotations map[string]string,
 	nbEndpoint string,
 	sbEndpoint string,
+	tlsDeploymentResources *tls.DeploymentResources,
 ) *appsv1.Deployment {
 
 	livenessProbe := &corev1.Probe{
@@ -57,6 +59,14 @@ func Deployment(
 		fmt.Sprintf("-vconsole:%s", instance.Spec.LogLevel),
 		fmt.Sprintf("--ovnnb-db=%s", nbEndpoint),
 		fmt.Sprintf("--ovnsb-db=%s", sbEndpoint),
+	}
+
+	if tlsDeploymentResources != nil {
+		args = append(args,
+			"--private-key=/etc/pki/tls/private/ovn_dbs.key",
+			"--certificate=/etc/pki/tls/certs/ovn_dbs.crt",
+			"--ca-cert=/etc/pki/tls/certs/ovn_dbs_ca.crt",
+		)
 	}
 
 	if instance.Spec.Debug.Service {
@@ -85,6 +95,15 @@ func Deployment(
 		readinessProbe.Exec = livenessProbe.Exec
 	}
 
+	// create Volume and VolumeMounts
+	volumes := []corev1.Volume{}
+	volumeMounts := []corev1.VolumeMount{}
+
+	if tlsDeploymentResources != nil {
+		volumes = append(volumes, tlsDeploymentResources.GetVolumes(false)...)
+		volumeMounts = append(volumeMounts, tlsDeploymentResources.GetVolumeMounts(false)...)
+	}
+
 	envVars := map[string]env.Setter{}
 	// TODO: Make confs customizable
 	envVars["OVN_RUNDIR"] = env.SetValue("/tmp")
@@ -105,6 +124,7 @@ func Deployment(
 					Labels:      labels,
 				},
 				Spec: corev1.PodSpec{
+					SecurityContext:    getOVNNorthdSecurityContext(),
 					ServiceAccountName: instance.RbacResourceName(),
 					Containers: []corev1.Container{
 						{
@@ -112,14 +132,15 @@ func Deployment(
 							Command:                  []string{cmd},
 							Args:                     args,
 							Image:                    instance.Spec.ContainerImage,
-							SecurityContext:          getOVNNorthdSecurityContext(),
 							Env:                      env.MergeEnvs([]corev1.EnvVar{}, envVars),
+							VolumeMounts:             volumeMounts,
 							Resources:                instance.Spec.Resources,
 							ReadinessProbe:           readinessProbe,
 							LivenessProbe:            livenessProbe,
 							TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
 						},
 					},
+					Volumes: volumes,
 				},
 			},
 		},

@@ -23,6 +23,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -31,12 +32,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/go-logr/logr"
+	"github.com/openstack-k8s-operators/lib-common/modules/certmanager"
 	"github.com/openstack-k8s-operators/lib-common/modules/common"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/condition"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/deployment"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/helper"
 	nad "github.com/openstack-k8s-operators/lib-common/modules/common/networkattachment"
 	common_rbac "github.com/openstack-k8s-operators/lib-common/modules/common/rbac"
+	"github.com/openstack-k8s-operators/lib-common/modules/common/secret"
+	"github.com/openstack-k8s-operators/lib-common/modules/common/tls"
+	"github.com/openstack-k8s-operators/lib-common/modules/common/util"
 	"github.com/openstack-k8s-operators/ovn-operator/api/v1beta1"
 	ovnv1 "github.com/openstack-k8s-operators/ovn-operator/api/v1beta1"
 	"github.com/openstack-k8s-operators/ovn-operator/pkg/ovnnorthd"
@@ -44,6 +49,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	k8s_errors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // OVNNorthdReconciler reconciles a OVNNorthd object
@@ -77,6 +83,9 @@ func (r *OVNNorthdReconciler) GetLogger(ctx context.Context) logr.Logger {
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;patch;update;delete;
 //+kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;
 //+kubebuilder:rbac:groups=k8s.cni.cncf.io,resources=network-attachment-definitions,verbs=get;list;watch
+//+kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch;delete;
+//+kubebuilder:rbac:groups=cert-manager.io,resources=issuers,verbs=get;list;watch
+//+kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete;
 
 // service account, role, rolebinding
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update
@@ -297,8 +306,6 @@ func (r *OVNNorthdReconciler) reconcileNormal(ctx context.Context, instance *ovn
 			instance.Spec.NetworkAttachment, err)
 	}
 
-	// TODO(owalsh): handle OVN dbs TLS cert/key
-
 	// Handle service update
 	ctrlResult, err := r.reconcileUpdate(ctx, instance, helper)
 	if err != nil {
@@ -324,9 +331,132 @@ func (r *OVNNorthdReconciler) reconcileNormal(ctx context.Context, instance *ovn
 		return ctrlResult, err
 	}
 
+	// Handle OVN dbs TLS cert/key
+	tlsDeploymentResources := &tls.DeploymentResources{
+		Volumes: []tls.Volume{},
+	}
+
+	if instance.Spec.TLS != nil && instance.Spec.TLS.Service != nil {
+		// generate certificate
+		if instance.Spec.TLS.Service.IssuerName != nil {
+			certRequest := certmanager.CertificateRequest{
+				IssuerName:  *instance.Spec.TLS.Service.IssuerName,
+				CertName:    fmt.Sprintf("%s-svc", instance.Name),
+				Duration:    nil,
+				Hostnames:   []string{fmt.Sprintf("%s.%s.svc", ovnnorthd.ServiceName, instance.Namespace)},
+				Ips:         nil,
+				Annotations: map[string]string{},
+				Labels:      serviceLabels,
+				Usages:      nil,
+			}
+			certSecret, ctrlResult, err := certmanager.EnsureCert(
+				ctx,
+				helper,
+				certRequest)
+			if err != nil {
+				return ctrlResult, err
+			} else if (ctrlResult != ctrl.Result{}) {
+				return ctrlResult, nil
+			}
+
+			values := [][]byte{}
+			if certSecret != nil {
+				for _, field := range []string{"tls.key", "tls.crt"} {
+					val, ok := certSecret.Data[field]
+					if !ok {
+						return ctrl.Result{}, fmt.Errorf("field %s not found in Secret %s", field, certSecret.Name)
+					}
+					values = append(values, val)
+				}
+			}
+
+			hash, err := util.ObjectHash(values)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+
+			// add endpoint cert to deployment resources
+			tlsDeploymentResources.Volumes = append(
+				tlsDeploymentResources.Volumes,
+				tls.Volume{
+					IsCA: false,
+					Hash: hash,
+					Volume: corev1.Volume{
+						Name: fmt.Sprintf("tls-certs-%s", instance.Name),
+						VolumeSource: corev1.VolumeSource{
+							Secret: &corev1.SecretVolumeSource{
+								SecretName:  certSecret.Name,
+								DefaultMode: ptr.To[int32](0440),
+							},
+						},
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{
+							Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
+							MountPath: "/etc/pki/tls/certs/ovn_dbs.crt",
+							SubPath:   "tls.crt",
+							ReadOnly:  true,
+						},
+						{
+							Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
+							MountPath: "/etc/pki/tls/private/ovn_dbs.key",
+							SubPath:   "tls.key",
+							ReadOnly:  true,
+						},
+					},
+				},
+			)
+		}
+	}
+
+	// add CA cert to deployment resources
+	if instance.Spec.TLS != nil && instance.Spec.TLS.Ca != nil && instance.Spec.TLS.Ca.CaSecretName != "" {
+		// verify that the ca secret is there
+		hash, ctrlResult, err := secret.VerifySecret(
+			ctx,
+			types.NamespacedName{
+				Name:      instance.Spec.TLS.Ca.CaSecretName,
+				Namespace: instance.Namespace,
+			},
+			[]string{"ca.crt"},
+			helper.GetClient(),
+			5*time.Second,
+		)
+		if err != nil {
+			return ctrlResult, err
+		} else if (ctrlResult != ctrl.Result{}) {
+			return ctrlResult, nil
+		}
+
+		tlsDeploymentResources.Volumes = append(
+			tlsDeploymentResources.Volumes,
+			tls.Volume{
+				Hash: hash,
+				IsCA: false,
+				Volume: corev1.Volume{
+					Name: "ca-certs",
+					VolumeSource: corev1.VolumeSource{
+						Secret: &corev1.SecretVolumeSource{
+							SecretName:  instance.Spec.TLS.Ca.CaSecretName,
+							DefaultMode: ptr.To[int32](0444),
+						},
+					},
+				},
+				VolumeMounts: []corev1.VolumeMount{
+					{
+						Name:      "ca-certs",
+						MountPath: "/etc/pki/tls/certs/ovn_dbs_ca.crt",
+						SubPath:   "ca.crt",
+						ReadOnly:  true,
+					},
+				},
+			},
+		)
+	}
+
 	// Define a new Deployment object
 	depl := deployment.NewDeployment(
-		ovnnorthd.Deployment(instance, serviceLabels, serviceAnnotations, nbEndpoint, sbEndpoint),
+		ovnnorthd.Deployment(instance, serviceLabels, serviceAnnotations, nbEndpoint, sbEndpoint, tlsDeploymentResources),
 		time.Duration(5)*time.Second,
 	)
 
