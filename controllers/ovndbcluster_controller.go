@@ -22,7 +22,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -96,6 +95,7 @@ func (r *OVNDBClusterReconciler) GetLogger(ctx context.Context) logr.Logger {
 //+kubebuilder:rbac:groups=k8s.cni.cncf.io,resources=network-attachment-definitions,verbs=get;list;watch
 //+kubebuilder:rbac:groups=cert-manager.io,resources=issuers,verbs=get;list;watch
 //+kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete;
+//+kubebuilder:rbac:groups=network.openstack.org,resources=dnsdata,verbs=get;list;watch;create;update;patch;delete;
 
 // service account, role, rolebinding
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update
@@ -597,42 +597,21 @@ func (r *OVNDBClusterReconciler) reconcileNormal(ctx context.Context, instance *
 	if instance.Status.ReadyCount > 0 && len(svcList.Items) > 0 {
 		instance.Status.Conditions.MarkTrue(condition.DeploymentReadyCondition, condition.DeploymentReadyMessage)
 		instance.Status.Conditions.MarkTrue(condition.ExposeServiceReadyCondition, condition.ExposeServiceReadyMessage)
-		dbAddress := []string{}
-		internalDbAddress := []string{}
-		raftAddress := []string{}
-		var svcPort int32
 		scheme := "tcp"
 		if instance.Spec.TLS != nil {
 			scheme = "ssl"
 		}
-		for _, svc := range svcList.Items {
-			svcPort = svc.Spec.Ports[0].Port
-
-			// Filter out headless services
-			if svc.Spec.ClusterIP != "None" {
-				// Test using hostname instead of ip for dbAddress connection
-				//serviceHostname := fmt.Sprintf("%s.%s.svc", svc.Name, svc.GetNamespace())
-				//dbAddress = append(dbAddress, fmt.Sprintf("tcp:%s:%d", serviceHostname, svc.Spec.Ports[0].Port))
-				internalDbAddress = append(internalDbAddress, fmt.Sprintf("%s:%s:%d", scheme, svc.Spec.ClusterIP, svcPort))
-				raftAddress = append(raftAddress, fmt.Sprintf("%s:%s:%d", scheme, svc.Spec.ClusterIP, svc.Spec.Ports[1].Port))
-			}
+		serviceName := ovndbcluster.ServiceNameNB
+		dbPort := 6641
+		raftPort := 6643
+		if instance.Spec.DBType == v1beta1.SBDBType {
+			dbPort = 6642
+			raftPort = 6644
+			serviceName = ovndbcluster.ServiceNameSB
 		}
-
-		// External dbAddress if networkAttachment is used
-		if instance.Spec.NetworkAttachment != "" {
-			net := instance.Namespace + "/" + instance.Spec.NetworkAttachment
-			if netStat, ok := instance.Status.NetworkAttachments[net]; ok {
-				for _, instanceIP := range netStat {
-					dbAddress = append(dbAddress, fmt.Sprintf("%s:%s:%d", scheme, instanceIP, svcPort))
-				}
-			}
-		}
-
-		// Set DB Addresses
-		instance.Status.InternalDBAddress = strings.Join(internalDbAddress, ",")
-		instance.Status.DBAddress = strings.Join(dbAddress, ",")
-		// Set RaftAddress
-		instance.Status.RaftAddress = strings.Join(raftAddress, ",")
+		instance.Status.InternalDBAddress = fmt.Sprintf("%s:%s.%s.svc:%d", scheme, serviceName, instance.Namespace, dbPort)
+		instance.Status.DBAddress = instance.Status.InternalDBAddress
+		instance.Status.RaftAddress = fmt.Sprintf("%s:%s.%s.svc:%d", scheme, serviceName, instance.Namespace, raftPort)
 	}
 	Log.Info("Reconciled Service successfully")
 	return ctrl.Result{}, nil

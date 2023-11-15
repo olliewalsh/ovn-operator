@@ -53,10 +53,14 @@ func HeadlessService(
 	instance *ovnv1.OVNDBCluster,
 	serviceLabels map[string]string,
 ) *corev1.Service {
+	dbPortName := "north"
 	raftPortName := "north-raft"
+	var dbPort int32 = 6641
 	var raftPort int32 = 6643
-	if instance.Spec.DBType == "SB" {
+	if instance.Spec.DBType == v1beta1.SBDBType {
+		dbPortName = "south"
 		raftPortName = "south-raft"
+		dbPort = 6642
 		raftPort = 6644
 	}
 	return &corev1.Service{
@@ -68,6 +72,11 @@ func HeadlessService(
 		Spec: corev1.ServiceSpec{
 			Selector: serviceLabels,
 			Ports: []corev1.ServicePort{
+				{
+					Name:     dbPortName,
+					Port:     dbPort,
+					Protocol: corev1.ProtocolTCP,
+				},
 				{
 					Name:     raftPortName,
 					Port:     raftPort,
