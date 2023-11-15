@@ -619,6 +619,10 @@ func (r *OVNDBClusterReconciler) reconcileServices(
 			ovnPod.Name,
 			ovnPod.Namespace,
 		)
+		if err != nil {
+			Log.Info(fmt.Sprintf("AAA - Trying to access to service: %v", ovnPod.Name))
+			return ctrl.Result{}, err
+		}
 		hostname := svc.ObjectMeta.Annotations[infranetworkv1.AnnotationHostnameKey]
 		hostnames = append(hostnames, hostname)
 
