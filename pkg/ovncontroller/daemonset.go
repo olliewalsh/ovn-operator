@@ -68,9 +68,9 @@ func DaemonSet(
 		volumes = append(volumes, tlsDeploymentResources.GetVolumes(false)...)
 		ovnVolumeMounts = append(ovnVolumeMounts, tlsDeploymentResources.GetVolumeMounts(false)...)
 		ovnControllerTLSArgs = []string{
-			"--ovn-controller-ssl-key=/etc/pki/tls/private/ovn_dbs.key",
-			"--ovn-controller-ssl-cert=/etc/pki/tls/certs/ovn_dbs.crt",
-			"--ovn-controller-ssl-ca-cert=/etc/pki/tls/certs/ovn_dbs_ca.crt",
+			"--private-key=/etc/pki/tls/private/ovn_dbs.key",
+			"--certificate=/etc/pki/tls/certs/ovn_dbs.crt",
+			"--ca-cert=/etc/pki/tls/certs/ovn_dbs_ca.crt",
 		}
 	}
 
