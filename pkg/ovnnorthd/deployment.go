@@ -61,7 +61,7 @@ func Deployment(
 		fmt.Sprintf("--ovnsb-db=%s", sbEndpoint),
 	}
 
-	if tlsDeploymentResources != nil {
+	if len(tlsDeploymentResources.Volumes) != 0 {
 		args = append(args,
 			"--private-key=/etc/pki/tls/private/ovn_dbs.key",
 			"--certificate=/etc/pki/tls/certs/ovn_dbs.crt",
