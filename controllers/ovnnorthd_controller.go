@@ -332,89 +332,87 @@ func (r *OVNNorthdReconciler) reconcileNormal(ctx context.Context, instance *ovn
 	// Handle OVN dbs TLS cert/key
 	var tlsDeploymentResources *tls.DeploymentResources
 
-	if instance.Spec.TLS != nil && instance.Spec.TLS.Service != nil {
+	if instance.Spec.TLS.OvnDbIssuer != "" {
 		// generate certificate
-		if instance.Spec.TLS.Service.IssuerName != nil {
-			certRequest := certmanager.CertificateRequest{
-				IssuerName: *instance.Spec.TLS.Service.IssuerName,
-				CertName:   fmt.Sprintf("%s-svc", instance.Name),
-				Duration:   nil,
-				Hostnames: []string{
-					fmt.Sprintf("%s.%s.svc", ovnnorthd.ServiceName, instance.Namespace),
-					fmt.Sprintf("%s.%s.svc.cluster.local", ovnnorthd.ServiceName, instance.Namespace),
-				},
-				Ips:         nil,
-				Annotations: map[string]string{},
-				Labels:      serviceLabels,
-				Usages: []certmgrv1.KeyUsage{
-					certmgrv1.UsageServerAuth,
-					certmgrv1.UsageClientAuth,
-				},
-			}
-			certSecret, ctrlResult, err := certmanager.EnsureCert(
-				ctx,
-				helper,
-				certRequest)
-			if err != nil {
-				return ctrlResult, err
-			} else if (ctrlResult != ctrl.Result{}) {
-				return ctrlResult, nil
-			}
+		certRequest := certmanager.CertificateRequest{
+			IssuerName: instance.Spec.TLS.OvnDbIssuer,
+			CertName:   fmt.Sprintf("%s-svc", instance.Name),
+			Duration:   nil,
+			Hostnames: []string{
+				fmt.Sprintf("%s.%s.svc", ovnnorthd.ServiceName, instance.Namespace),
+				fmt.Sprintf("%s.%s.svc.cluster.local", ovnnorthd.ServiceName, instance.Namespace),
+			},
+			Ips:         nil,
+			Annotations: map[string]string{},
+			Labels:      serviceLabels,
+			Usages: []certmgrv1.KeyUsage{
+				certmgrv1.UsageServerAuth,
+				certmgrv1.UsageClientAuth,
+			},
+		}
+		certSecret, ctrlResult, err := certmanager.EnsureCert(
+			ctx,
+			helper,
+			certRequest)
+		if err != nil {
+			return ctrlResult, err
+		} else if (ctrlResult != ctrl.Result{}) {
+			return ctrlResult, nil
+		}
 
-			values := [][]byte{}
-			if certSecret != nil {
-				for _, field := range []string{"tls.key", "tls.crt"} {
-					val, ok := certSecret.Data[field]
-					if !ok {
-						return ctrl.Result{}, fmt.Errorf("field %s not found in Secret %s", field, certSecret.Name)
-					}
-					values = append(values, val)
+		values := [][]byte{}
+		if certSecret != nil {
+			for _, field := range []string{"tls.key", "tls.crt"} {
+				val, ok := certSecret.Data[field]
+				if !ok {
+					return ctrl.Result{}, fmt.Errorf("field %s not found in Secret %s", field, certSecret.Name)
 				}
+				values = append(values, val)
 			}
+		}
 
-			hash, err := util.ObjectHash(values)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
+		hash, err := util.ObjectHash(values)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
 
-			// add endpoint cert to deployment resources
-			tlsDeploymentResources = &tls.DeploymentResources{
-				Volumes: []tls.Volume{
-					{
-						IsCA: false,
-						Hash: hash,
-						Volume: corev1.Volume{
-							Name: fmt.Sprintf("tls-certs-%s", instance.Name),
-							VolumeSource: corev1.VolumeSource{
-								Secret: &corev1.SecretVolumeSource{
-									SecretName:  certSecret.Name,
-									DefaultMode: ptr.To[int32](0440),
-								},
-							},
-						},
-						VolumeMounts: []corev1.VolumeMount{
-							{
-								Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
-								MountPath: "/etc/pki/tls/certs/ovn_dbs.crt",
-								SubPath:   "tls.crt",
-								ReadOnly:  true,
-							},
-							{
-								Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
-								MountPath: "/etc/pki/tls/private/ovn_dbs.key",
-								SubPath:   "tls.key",
-								ReadOnly:  true,
-							},
-							{
-								Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
-								MountPath: "/etc/pki/tls/certs/ovn_dbs_ca.crt",
-								SubPath:   "ca.crt",
-								ReadOnly:  true,
+		// add endpoint cert to deployment resources
+		tlsDeploymentResources = &tls.DeploymentResources{
+			Volumes: []tls.Volume{
+				{
+					IsCA: false,
+					Hash: hash,
+					Volume: corev1.Volume{
+						Name: fmt.Sprintf("tls-certs-%s", instance.Name),
+						VolumeSource: corev1.VolumeSource{
+							Secret: &corev1.SecretVolumeSource{
+								SecretName:  certSecret.Name,
+								DefaultMode: ptr.To[int32](0440),
 							},
 						},
 					},
+					VolumeMounts: []corev1.VolumeMount{
+						{
+							Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
+							MountPath: "/etc/pki/tls/certs/ovn_dbs.crt",
+							SubPath:   "tls.crt",
+							ReadOnly:  true,
+						},
+						{
+							Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
+							MountPath: "/etc/pki/tls/private/ovn_dbs.key",
+							SubPath:   "tls.key",
+							ReadOnly:  true,
+						},
+						{
+							Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
+							MountPath: "/etc/pki/tls/certs/ovn_dbs_ca.crt",
+							SubPath:   "ca.crt",
+							ReadOnly:  true,
+						},
+					},
 				},
-			}
+			},
 		}
 	}
 

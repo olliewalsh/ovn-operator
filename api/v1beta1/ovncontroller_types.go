@@ -18,7 +18,6 @@ package v1beta1
 
 import (
 	"github.com/openstack-k8s-operators/lib-common/modules/common/condition"
-	"github.com/openstack-k8s-operators/lib-common/modules/common/tls"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,6 +34,16 @@ const (
 	// OvnControllerContainerImage is the fall-back container image for OVNController ovn-controller
 	OvnControllerContainerImage = "quay.io/podified-antelope-centos9/openstack-ovn-controller:current-podified"
 )
+
+// TLS - encapsulates both the global CA bundle and OvnDb cert issuer
+type TLS struct {
+	// +kubebuilder:validation:Optional
+	// CA bundle to trust for all client use cases
+	CaSecretName string `json:"caSecretName,omitempty"`
+	// +kubebuilder:validation:Optional
+	// TLS CA issuer to trust for Ovn Database and to generate certificates
+	OvnDbIssuer string `json:"ovnDbIssuer,omitempty"`
+}
 
 // OVNControllerSpec defines the desired state of OVNController
 type OVNControllerSpec struct {
@@ -75,7 +84,7 @@ type OVNControllerSpec struct {
 
 	// +kubebuilder:validation:Optional
 	// TLS - Parameters related to the TLS
-	TLS *tls.TLS `json:"tls,omitempty"`
+	TLS TLS `json:"tls,omitempty"`
 }
 
 // OVNControllerDebug defines the observed state of OVNControllerDebug

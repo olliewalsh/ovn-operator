@@ -385,93 +385,91 @@ func (r *OVNDBClusterReconciler) reconcileNormal(ctx context.Context, instance *
 	// Handle OVN dbs TLS cert/key
 	var tlsDeploymentResources *tls.DeploymentResources
 
-	if instance.Spec.TLS != nil && instance.Spec.TLS.Service != nil {
+	if instance.Spec.TLS.OvnDbIssuer != "" {
 		// generate certificate
-		if instance.Spec.TLS.Service.IssuerName != nil {
-			serviceName := ovndbcluster.ServiceNameNB
-			if instance.Spec.DBType == v1beta1.SBDBType {
-				serviceName = ovndbcluster.ServiceNameSB
-			}
-			certRequest := certmanager.CertificateRequest{
-				IssuerName: *instance.Spec.TLS.Service.IssuerName,
-				CertName:   fmt.Sprintf("%s-svc", instance.Name),
-				Duration:   nil,
-				Hostnames: []string{
-					fmt.Sprintf("%s.%s.svc", serviceName, instance.Namespace),
-					fmt.Sprintf("%s.%s.svc.cluster.local", serviceName, instance.Namespace),
-				},
-				Ips:         nil,
-				Annotations: map[string]string{},
-				Labels:      serviceLabels,
-				Usages: []certmgrv1.KeyUsage{
-					certmgrv1.UsageServerAuth,
-					certmgrv1.UsageClientAuth,
-				},
-			}
-			certSecret, ctrlResult, err := certmanager.EnsureCert(
-				ctx,
-				helper,
-				certRequest)
-			if err != nil {
-				return ctrlResult, err
-			} else if (ctrlResult != ctrl.Result{}) {
-				return ctrlResult, nil
-			}
+		serviceName := ovndbcluster.ServiceNameNB
+		if instance.Spec.DBType == v1beta1.SBDBType {
+			serviceName = ovndbcluster.ServiceNameSB
+		}
+		certRequest := certmanager.CertificateRequest{
+			IssuerName: instance.Spec.TLS.OvnDbIssuer,
+			CertName:   fmt.Sprintf("%s-svc", instance.Name),
+			Duration:   nil,
+			Hostnames: []string{
+				fmt.Sprintf("%s.%s.svc", serviceName, instance.Namespace),
+				fmt.Sprintf("%s.%s.svc.cluster.local", serviceName, instance.Namespace),
+			},
+			Ips:         nil,
+			Annotations: map[string]string{},
+			Labels:      serviceLabels,
+			Usages: []certmgrv1.KeyUsage{
+				certmgrv1.UsageServerAuth,
+				certmgrv1.UsageClientAuth,
+			},
+		}
+		certSecret, ctrlResult, err := certmanager.EnsureCert(
+			ctx,
+			helper,
+			certRequest)
+		if err != nil {
+			return ctrlResult, err
+		} else if (ctrlResult != ctrl.Result{}) {
+			return ctrlResult, nil
+		}
 
-			values := [][]byte{}
-			if certSecret != nil {
-				for _, field := range []string{"tls.key", "tls.crt"} {
-					val, ok := certSecret.Data[field]
-					if !ok {
-						return ctrl.Result{}, fmt.Errorf("field %s not found in Secret %s", field, certSecret.Name)
-					}
-					values = append(values, val)
+		values := [][]byte{}
+		if certSecret != nil {
+			for _, field := range []string{"tls.key", "tls.crt"} {
+				val, ok := certSecret.Data[field]
+				if !ok {
+					return ctrl.Result{}, fmt.Errorf("field %s not found in Secret %s", field, certSecret.Name)
 				}
+				values = append(values, val)
 			}
+		}
 
-			hash, err := util.ObjectHash(values)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
+		hash, err := util.ObjectHash(values)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
 
-			// add endpoint cert to deployment resources
-			tlsDeploymentResources = &tls.DeploymentResources{
-				Volumes: []tls.Volume{
-					{
-						IsCA: false,
-						Hash: hash,
-						Volume: corev1.Volume{
-							Name: fmt.Sprintf("tls-certs-%s", instance.Name),
-							VolumeSource: corev1.VolumeSource{
-								Secret: &corev1.SecretVolumeSource{
-									SecretName:  certSecret.Name,
-									DefaultMode: ptr.To[int32](0440),
-								},
-							},
-						},
-						VolumeMounts: []corev1.VolumeMount{
-							{
-								Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
-								MountPath: "/etc/pki/tls/certs/ovn_dbs.crt",
-								SubPath:   "tls.crt",
-								ReadOnly:  true,
-							},
-							{
-								Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
-								MountPath: "/etc/pki/tls/private/ovn_dbs.key",
-								SubPath:   "tls.key",
-								ReadOnly:  true,
-							},
-							{
-								Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
-								MountPath: "/etc/pki/tls/certs/ovn_dbs_ca.crt",
-								SubPath:   "ca.crt",
-								ReadOnly:  true,
+		// add endpoint cert to deployment resources
+		tlsDeploymentResources = &tls.DeploymentResources{
+			Volumes: []tls.Volume{
+				{
+					IsCA: false,
+					Hash: hash,
+					Volume: corev1.Volume{
+						Name: fmt.Sprintf("tls-certs-%s", instance.Name),
+						VolumeSource: corev1.VolumeSource{
+							Secret: &corev1.SecretVolumeSource{
+								SecretName:  certSecret.Name,
+								DefaultMode: ptr.To[int32](0440),
 							},
 						},
 					},
+					VolumeMounts: []corev1.VolumeMount{
+						{
+							Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
+							MountPath: "/etc/pki/tls/certs/ovn_dbs.crt",
+							SubPath:   "tls.crt",
+							ReadOnly:  true,
+						},
+						{
+							Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
+							MountPath: "/etc/pki/tls/private/ovn_dbs.key",
+							SubPath:   "tls.key",
+							ReadOnly:  true,
+						},
+						{
+							Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
+							MountPath: "/etc/pki/tls/certs/ovn_dbs_ca.crt",
+							SubPath:   "ca.crt",
+							ReadOnly:  true,
+						},
+					},
 				},
-			}
+			},
 		}
 	}
 
@@ -562,7 +560,7 @@ func (r *OVNDBClusterReconciler) reconcileNormal(ctx context.Context, instance *
 		instance.Status.Conditions.MarkTrue(condition.DeploymentReadyCondition, condition.DeploymentReadyMessage)
 		instance.Status.Conditions.MarkTrue(condition.ExposeServiceReadyCondition, condition.ExposeServiceReadyMessage)
 		scheme := "tcp"
-		if instance.Spec.TLS != nil {
+		if instance.Spec.TLS.OvnDbIssuer != "" {
 			scheme = "ssl"
 		}
 		serviceName := ovndbcluster.ServiceNameNB
@@ -785,7 +783,7 @@ func (r *OVNDBClusterReconciler) generateServiceConfigMaps(
 	templateParameters["OVN_ELECTION_TIMER"] = instance.Spec.ElectionTimer
 	templateParameters["OVN_INACTIVITY_PROBE"] = instance.Spec.InactivityProbe
 	templateParameters["OVN_PROBE_INTERVAL_TO_ACTIVE"] = instance.Spec.ProbeIntervalToActive
-	templateParameters["TLS"] = instance.Spec.TLS != nil
+	templateParameters["TLS"] = instance.Spec.TLS.OvnDbIssuer != ""
 	cms := []util.Template{
 		// ScriptsConfigMap
 		{

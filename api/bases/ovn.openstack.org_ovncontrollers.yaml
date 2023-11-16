@@ -152,27 +152,13 @@ spec:
               tls:
                 description: TLS - Parameters related to the TLS
                 properties:
-                  ca:
-                    description: Ca contains CA-specific settings, which could be
-                      used both by services (to define their own CA certificates)
-                      and by clients (to verify the server's certificate)
-                    properties:
-                      caSecretName:
-                        type: string
-                    type: object
-                  service:
-                    description: Service contains server-specific TLS secret
-                    properties:
-                      disableNonTLSListeners:
-                        type: boolean
-                      issuerName:
-                        type: string
-                      secretName:
-                        type: string
-                    type: object
-                required:
-                - ca
-                - service
+                  caSecretName:
+                    description: CA bundle to trust for all client use cases
+                    type: string
+                  ovnDbIssuer:
+                    description: TLS CA issuer to trust for Ovn Database and to generate
+                      certificates
+                    type: string
                 type: object
             required:
             - ovnContainerImage
