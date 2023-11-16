@@ -30,7 +30,6 @@ import (
 	"github.com/openstack-k8s-operators/lib-common/modules/common/helper"
 	nad "github.com/openstack-k8s-operators/lib-common/modules/common/networkattachment"
 	common_rbac "github.com/openstack-k8s-operators/lib-common/modules/common/rbac"
-	"github.com/openstack-k8s-operators/lib-common/modules/common/secret"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/tls"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/util"
 	"github.com/openstack-k8s-operators/ovn-operator/api/v1beta1"
@@ -41,7 +40,6 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	k8s_errors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -332,9 +330,7 @@ func (r *OVNNorthdReconciler) reconcileNormal(ctx context.Context, instance *ovn
 	}
 
 	// Handle OVN dbs TLS cert/key
-	tlsDeploymentResources := &tls.DeploymentResources{
-		Volumes: []tls.Volume{},
-	}
+	var tlsDeploymentResources *tls.DeploymentResources
 
 	if instance.Spec.TLS != nil && instance.Spec.TLS.Service != nil {
 		// generate certificate
@@ -382,82 +378,44 @@ func (r *OVNNorthdReconciler) reconcileNormal(ctx context.Context, instance *ovn
 			}
 
 			// add endpoint cert to deployment resources
-			tlsDeploymentResources.Volumes = append(
-				tlsDeploymentResources.Volumes,
-				tls.Volume{
-					IsCA: false,
-					Hash: hash,
-					Volume: corev1.Volume{
-						Name: fmt.Sprintf("tls-certs-%s", instance.Name),
-						VolumeSource: corev1.VolumeSource{
-							Secret: &corev1.SecretVolumeSource{
-								SecretName:  certSecret.Name,
-								DefaultMode: ptr.To[int32](0440),
+			tlsDeploymentResources = &tls.DeploymentResources{
+				Volumes: []tls.Volume{
+					{
+						IsCA: false,
+						Hash: hash,
+						Volume: corev1.Volume{
+							Name: fmt.Sprintf("tls-certs-%s", instance.Name),
+							VolumeSource: corev1.VolumeSource{
+								Secret: &corev1.SecretVolumeSource{
+									SecretName:  certSecret.Name,
+									DefaultMode: ptr.To[int32](0440),
+								},
+							},
+						},
+						VolumeMounts: []corev1.VolumeMount{
+							{
+								Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
+								MountPath: "/etc/pki/tls/certs/ovn_dbs.crt",
+								SubPath:   "tls.crt",
+								ReadOnly:  true,
+							},
+							{
+								Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
+								MountPath: "/etc/pki/tls/private/ovn_dbs.key",
+								SubPath:   "tls.key",
+								ReadOnly:  true,
+							},
+							{
+								Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
+								MountPath: "/etc/pki/tls/certs/ovn_dbs_ca.crt",
+								SubPath:   "ca.crt",
+								ReadOnly:  true,
 							},
 						},
 					},
-					VolumeMounts: []corev1.VolumeMount{
-						{
-							Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
-							MountPath: "/etc/pki/tls/certs/ovn_dbs.crt",
-							SubPath:   "tls.crt",
-							ReadOnly:  true,
-						},
-						{
-							Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
-							MountPath: "/etc/pki/tls/private/ovn_dbs.key",
-							SubPath:   "tls.key",
-							ReadOnly:  true,
-						},
-					},
 				},
-			)
+			}
 		}
-	}
-
-	// add CA cert to deployment resources
-	if instance.Spec.TLS != nil && instance.Spec.TLS.Ca != nil && instance.Spec.TLS.Ca.CaSecretName != "" {
-		// verify that the ca secret is there
-		hash, ctrlResult, err := secret.VerifySecret(
-			ctx,
-			types.NamespacedName{
-				Name:      instance.Spec.TLS.Ca.CaSecretName,
-				Namespace: instance.Namespace,
-			},
-			[]string{"ca.crt"},
-			helper.GetClient(),
-			5*time.Second,
-		)
-		if err != nil {
-			return ctrlResult, err
-		} else if (ctrlResult != ctrl.Result{}) {
-			return ctrlResult, nil
-		}
-
-		tlsDeploymentResources.Volumes = append(
-			tlsDeploymentResources.Volumes,
-			tls.Volume{
-				Hash: hash,
-				IsCA: false,
-				Volume: corev1.Volume{
-					Name: "ca-certs",
-					VolumeSource: corev1.VolumeSource{
-						Secret: &corev1.SecretVolumeSource{
-							SecretName:  instance.Spec.TLS.Ca.CaSecretName,
-							DefaultMode: ptr.To[int32](0444),
-						},
-					},
-				},
-				VolumeMounts: []corev1.VolumeMount{
-					{
-						Name:      "ca-certs",
-						MountPath: "/etc/pki/tls/certs/ovn_dbs_ca.crt",
-						SubPath:   "ca.crt",
-						ReadOnly:  true,
-					},
-				},
-			},
-		)
 	}
 
 	// Define a new Deployment object

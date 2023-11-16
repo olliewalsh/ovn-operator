@@ -116,7 +116,7 @@ func StatefulSet(
 	volumes := GetDBClusterVolumes(instance.Name)
 	volumeMounts := GetDBClusterVolumeMounts(instance.Name + PvcSuffixEtcOvn)
 
-	if len(tlsDeploymentResources.Volumes) != 0 {
+	if tlsDeploymentResources != nil {
 		volumes = append(volumes, tlsDeploymentResources.GetVolumes(false)...)
 		volumeMounts = append(volumeMounts, tlsDeploymentResources.GetVolumeMounts(false)...)
 	}
