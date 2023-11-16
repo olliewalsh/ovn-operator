@@ -397,10 +397,13 @@ func (r *OVNDBClusterReconciler) reconcileNormal(ctx context.Context, instance *
 				serviceName = ovndbcluster.ServiceNameSB
 			}
 			certRequest := certmanager.CertificateRequest{
-				IssuerName:  *instance.Spec.TLS.Service.IssuerName,
-				CertName:    fmt.Sprintf("%s-svc", instance.Name),
-				Duration:    nil,
-				Hostnames:   []string{fmt.Sprintf("%s.%s.svc", serviceName, instance.Namespace)},
+				IssuerName: *instance.Spec.TLS.Service.IssuerName,
+				CertName:   fmt.Sprintf("%s-svc", instance.Name),
+				Duration:   nil,
+				Hostnames: []string{
+					fmt.Sprintf("%s.%s.svc", serviceName, instance.Namespace),
+					fmt.Sprintf("%s.%s.svc.cluster.local", serviceName, instance.Namespace),
+				},
 				Ips:         nil,
 				Annotations: map[string]string{},
 				Labels:      serviceLabels,
@@ -609,9 +612,9 @@ func (r *OVNDBClusterReconciler) reconcileNormal(ctx context.Context, instance *
 			raftPort = 6644
 			serviceName = ovndbcluster.ServiceNameSB
 		}
-		instance.Status.InternalDBAddress = fmt.Sprintf("%s:%s.%s.svc:%d", scheme, serviceName, instance.Namespace, dbPort)
-		instance.Status.DBAddress = instance.Status.InternalDBAddress
-		instance.Status.RaftAddress = fmt.Sprintf("%s:%s.%s.svc:%d", scheme, serviceName, instance.Namespace, raftPort)
+		instance.Status.InternalDBAddress = fmt.Sprintf("%s:%s.%s.svc.cluster.local:%d", scheme, serviceName, instance.Namespace, dbPort)
+		instance.Status.DBAddress = fmt.Sprintf("%s:%s.%s.svc:%d", scheme, serviceName, instance.Namespace, dbPort)
+		instance.Status.RaftAddress = fmt.Sprintf("%s:%s.%s.svc.cluster.local:%d", scheme, serviceName, instance.Namespace, raftPort)
 	}
 	Log.Info("Reconciled Service successfully")
 	return ctrl.Result{}, nil

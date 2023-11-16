@@ -340,10 +340,13 @@ func (r *OVNNorthdReconciler) reconcileNormal(ctx context.Context, instance *ovn
 		// generate certificate
 		if instance.Spec.TLS.Service.IssuerName != nil {
 			certRequest := certmanager.CertificateRequest{
-				IssuerName:  *instance.Spec.TLS.Service.IssuerName,
-				CertName:    fmt.Sprintf("%s-svc", instance.Name),
-				Duration:    nil,
-				Hostnames:   []string{fmt.Sprintf("%s.%s.svc", ovnnorthd.ServiceName, instance.Namespace)},
+				IssuerName: *instance.Spec.TLS.Service.IssuerName,
+				CertName:   fmt.Sprintf("%s-svc", instance.Name),
+				Duration:   nil,
+				Hostnames: []string{
+					fmt.Sprintf("%s.%s.svc", ovnnorthd.ServiceName, instance.Namespace),
+					fmt.Sprintf("%s.%s.svc.cluster.local", ovnnorthd.ServiceName, instance.Namespace),
+				},
 				Ips:         nil,
 				Annotations: map[string]string{},
 				Labels:      serviceLabels,
