@@ -34,6 +34,7 @@ fi
 --ovn-${DB_TYPE}-db-ssl-ca-cert=/etc/pki/tls/certs/ovn_dbs_ca.crt \
 --db-${DB_TYPE}-cluster-local-proto=ssl \
 --db-${DB_TYPE}-cluster-remote-proto=ssl \
+--db-${DB_TYPE}-create-insecure-remote=no \
 {{- else }}
 --db-${DB_TYPE}-cluster-local-proto=tcp \
 --db-${DB_TYPE}-cluster-remote-proto=tcp \

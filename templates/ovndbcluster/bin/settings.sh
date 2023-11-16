@@ -30,8 +30,9 @@ if [[ "$(hostname)" == "{{ .SERVICE_NAME }}-0" ]]; then
         sleep 1
     done
 
-    while [ "$(ovn-${DB_TYPE}ctl --no-leader-only get connection . inactivity_probe)" != "{{ .OVN_INACTIVITY_PROBE }}" ]; do
-        ovn-${DB_TYPE}ctl --no-leader-only --inactivity-probe={{ .OVN_INACTIVITY_PROBE }} set-connection ${DB_SCHEME}:${DB_PORT}:0.0.0.0
-    done
+{{- if .TLS }}
+    ovn-${DB_TYPE}ctl --no-leader-only set-ssl /etc/pki/tls/private/ovn_dbs.key /etc/pki/tls/certs/ovn_dbs.crt /etc/pki/tls/certs/ovn_dbs_ca.crt
+{{- end }}
+    ovn-${DB_TYPE}ctl --no-leader-only --inactivity-probe={{ .OVN_INACTIVITY_PROBE }} set-connection ${DB_SCHEME}:${DB_PORT}:0.0.0.0
     ovn-${DB_TYPE}ctl --no-leader-only list connection
 fi
