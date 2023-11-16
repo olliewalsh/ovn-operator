@@ -13,6 +13,8 @@ limitations under the License.
 package ovncontroller
 
 import (
+	"strings"
+
 	"github.com/openstack-k8s-operators/lib-common/modules/common"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/env"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/tls"
@@ -54,6 +56,22 @@ func DaemonSet(
 
 	noopCmd := []string{
 		"/bin/true",
+	}
+
+	// create Volume and VolumeMounts
+	volumes := GetVolumes(instance.Name)
+	ovnVolumeMounts := GetOvnControllerVolumeMounts()
+
+	var ovnControllerTLSArgs []string
+
+	if tlsDeploymentResources != nil {
+		volumes = append(volumes, tlsDeploymentResources.GetVolumes(false)...)
+		ovnVolumeMounts = append(ovnVolumeMounts, tlsDeploymentResources.GetVolumeMounts(false)...)
+		ovnControllerTLSArgs = []string{
+			"--ovn-controller-ssl-key=/etc/pki/tls/private/ovn_dbs.key",
+			"--ovn-controller-ssl-cert=/etc/pki/tls/certs/ovn_dbs.crt",
+			"--ovn-controller-ssl-ca-cert=/etc/pki/tls/certs/ovn_dbs_ca.crt",
+		}
 	}
 
 	var ovsDbPreStopCmd []string
@@ -119,25 +137,17 @@ func DaemonSet(
 		}
 
 		ovnControllerArgs = []string{
-			"/usr/local/bin/container-scripts/net_setup.sh && ovn-controller --pidfile unix:/run/openvswitch/db.sock",
+			strings.Join(
+				append(
+					[]string{"/usr/local/bin/container-scripts/net_setup.sh && ovn-controller"},
+					append(ovnControllerTLSArgs, "--pidfile", "unix:/run/openvswitch/db.sock")...,
+				),
+				" ",
+			),
 		}
 		ovnControllerPreStopCmd = []string{
 			"/usr/share/ovn/scripts/ovn-ctl", "stop_controller",
 		}
-	}
-
-	// create Volume and VolumeMounts
-	volumes := GetVolumes(instance.Name)
-	ovnVolumeMounts := GetOvnControllerVolumeMounts()
-
-	if tlsDeploymentResources != nil {
-		volumes = append(volumes, tlsDeploymentResources.GetVolumes(false)...)
-		ovnVolumeMounts = append(ovnVolumeMounts, tlsDeploymentResources.GetVolumeMounts(false)...)
-		ovnControllerArgs = append(ovnControllerArgs,
-			"--ovn-controller-ssl-key=/etc/pki/tls/private/ovn_dbs.key",
-			"--ovn-controller-ssl-cert=/etc/pki/tls/certs/ovn_dbs.crt",
-			"--ovn-controller-ssl-ca-cert=/etc/pki/tls/certs/ovn_dbs_ca.crt",
-		)
 	}
 
 	envVars := map[string]env.Setter{}
