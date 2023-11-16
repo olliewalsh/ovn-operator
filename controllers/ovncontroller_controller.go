@@ -22,12 +22,14 @@ import (
 	"sort"
 	"time"
 
+	certmgrv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	"github.com/go-logr/logr"
 	netattdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	k8s_errors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -35,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
+	"github.com/openstack-k8s-operators/lib-common/modules/certmanager"
 	"github.com/openstack-k8s-operators/lib-common/modules/common"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/condition"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/configmap"
@@ -45,6 +48,7 @@ import (
 	"github.com/openstack-k8s-operators/lib-common/modules/common/labels"
 	nad "github.com/openstack-k8s-operators/lib-common/modules/common/networkattachment"
 	common_rbac "github.com/openstack-k8s-operators/lib-common/modules/common/rbac"
+	"github.com/openstack-k8s-operators/lib-common/modules/common/tls"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/util"
 	"github.com/openstack-k8s-operators/ovn-operator/api/v1beta1"
 	"github.com/openstack-k8s-operators/ovn-operator/pkg/ovncontroller"
@@ -80,6 +84,8 @@ func (r *OVNControllerReconciler) GetClient() client.Client {
 //+kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;patch;update;delete;
 //+kubebuilder:rbac:groups=ovn.openstack.org,resources=ovndbclusters,verbs=get;list;watch;
 //+kubebuilder:rbac:groups=k8s.cni.cncf.io,resources=network-attachment-definitions,verbs=create;delete;get;list;patch;update;watch
+//+kubebuilder:rbac:groups=cert-manager.io,resources=issuers,verbs=get;list;watch
+//+kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete;
 
 // service account, role, rolebinding
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update
@@ -388,8 +394,96 @@ func (r *OVNControllerReconciler) reconcileNormal(ctx context.Context, instance 
 		return ctrlResult, nil
 	}
 
+	// Handle OVN dbs TLS cert/key
+	var tlsDeploymentResources *tls.DeploymentResources
+
+	if instance.Spec.TLS != nil && instance.Spec.TLS.Service != nil {
+		// generate certificate
+		if instance.Spec.TLS.Service.IssuerName != nil {
+			certRequest := certmanager.CertificateRequest{
+				IssuerName: *instance.Spec.TLS.Service.IssuerName,
+				CertName:   fmt.Sprintf("%s-svc", instance.Name),
+				Duration:   nil,
+				// Not the actual hostname but must provide something to generate the cert
+				Hostnames: []string{
+					fmt.Sprintf("%s.%s.svc", ovncontroller.ServiceName, instance.Namespace),
+					fmt.Sprintf("%s.%s.svc.cluster.local", ovncontroller.ServiceName, instance.Namespace),
+				},
+				Ips:         nil,
+				Annotations: map[string]string{},
+				Labels:      serviceLabels,
+				Usages: []certmgrv1.KeyUsage{
+					certmgrv1.UsageClientAuth,
+				},
+			}
+			certSecret, ctrlResult, err := certmanager.EnsureCert(
+				ctx,
+				helper,
+				certRequest)
+			if err != nil {
+				return ctrlResult, err
+			} else if (ctrlResult != ctrl.Result{}) {
+				return ctrlResult, nil
+			}
+
+			values := [][]byte{}
+			if certSecret != nil {
+				for _, field := range []string{"tls.key", "tls.crt"} {
+					val, ok := certSecret.Data[field]
+					if !ok {
+						return ctrl.Result{}, fmt.Errorf("field %s not found in Secret %s", field, certSecret.Name)
+					}
+					values = append(values, val)
+				}
+			}
+
+			hash, err := util.ObjectHash(values)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+
+			tlsDeploymentResources = &tls.DeploymentResources{
+				Volumes: []tls.Volume{
+					{
+						IsCA: false,
+						Hash: hash,
+						Volume: corev1.Volume{
+							Name: fmt.Sprintf("tls-certs-%s", instance.Name),
+							VolumeSource: corev1.VolumeSource{
+								Secret: &corev1.SecretVolumeSource{
+									SecretName:  certSecret.Name,
+									DefaultMode: ptr.To[int32](0440),
+								},
+							},
+						},
+						VolumeMounts: []corev1.VolumeMount{
+							{
+								Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
+								MountPath: "/etc/pki/tls/certs/ovn_dbs.crt",
+								SubPath:   "tls.crt",
+								ReadOnly:  true,
+							},
+							{
+								Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
+								MountPath: "/etc/pki/tls/private/ovn_dbs.key",
+								SubPath:   "tls.key",
+								ReadOnly:  true,
+							},
+							{
+								Name:      fmt.Sprintf("tls-certs-%s", instance.Name),
+								MountPath: "/etc/pki/tls/certs/ovn_dbs_ca.crt",
+								SubPath:   "ca.crt",
+								ReadOnly:  true,
+							},
+						},
+					},
+				},
+			}
+		}
+	}
+
 	// Define a new DaemonSet object
-	ovnDaemonSet, err := ovncontroller.DaemonSet(instance, inputHash, serviceLabels, serviceAnnotations)
+	ovnDaemonSet, err := ovncontroller.DaemonSet(instance, inputHash, serviceLabels, serviceAnnotations, tlsDeploymentResources)
 	if err != nil {
 		Log.Error(err, "Failed to create OVNController DaemonSet")
 		return ctrl.Result{}, err

@@ -149,6 +149,31 @@ spec:
                       to an implementation-defined value. More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/'
                     type: object
                 type: object
+              tls:
+                description: TLS - Parameters related to the TLS
+                properties:
+                  ca:
+                    description: Ca contains CA-specific settings, which could be
+                      used both by services (to define their own CA certificates)
+                      and by clients (to verify the server's certificate)
+                    properties:
+                      caSecretName:
+                        type: string
+                    type: object
+                  service:
+                    description: Service contains server-specific TLS secret
+                    properties:
+                      disableNonTLSListeners:
+                        type: boolean
+                      issuerName:
+                        type: string
+                      secretName:
+                        type: string
+                    type: object
+                required:
+                - ca
+                - service
+                type: object
             required:
             - ovnContainerImage
             - ovsContainerImage

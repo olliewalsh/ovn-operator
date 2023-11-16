@@ -15,6 +15,7 @@ package ovncontroller
 import (
 	"github.com/openstack-k8s-operators/lib-common/modules/common"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/env"
+	"github.com/openstack-k8s-operators/lib-common/modules/common/tls"
 	"github.com/openstack-k8s-operators/ovn-operator/api/v1beta1"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -28,6 +29,7 @@ func DaemonSet(
 	configHash string,
 	labels map[string]string,
 	annotations map[string]string,
+	tlsDeploymentResources *tls.DeploymentResources,
 ) (*appsv1.DaemonSet, error) {
 
 	runAsUser := int64(0)
@@ -122,6 +124,20 @@ func DaemonSet(
 		ovnControllerPreStopCmd = []string{
 			"/usr/share/ovn/scripts/ovn-ctl", "stop_controller",
 		}
+	}
+
+	// create Volume and VolumeMounts
+	volumes := GetVolumes(instance.Name)
+	ovnVolumeMounts := GetOvnControllerVolumeMounts()
+
+	if tlsDeploymentResources != nil {
+		volumes = append(volumes, tlsDeploymentResources.GetVolumes(false)...)
+		ovnVolumeMounts = append(ovnVolumeMounts, tlsDeploymentResources.GetVolumeMounts(false)...)
+		ovnControllerArgs = append(ovnControllerArgs,
+			"--ovn-controller-ssl-key=/etc/pki/tls/private/ovn_dbs.key",
+			"--ovn-controller-ssl-cert=/etc/pki/tls/certs/ovn_dbs.crt",
+			"--ovn-controller-ssl-ca-cert=/etc/pki/tls/certs/ovn_dbs_ca.crt",
+		)
 	}
 
 	envVars := map[string]env.Setter{}
@@ -222,7 +238,7 @@ func DaemonSet(
 								Privileged: &privileged,
 							},
 							Env:                      env.MergeEnvs([]corev1.EnvVar{}, envVars),
-							VolumeMounts:             GetOvnControllerVolumeMounts(),
+							VolumeMounts:             ovnVolumeMounts,
 							Resources:                instance.Spec.Resources,
 							TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
 						},
@@ -231,7 +247,7 @@ func DaemonSet(
 			},
 		},
 	}
-	daemonset.Spec.Template.Spec.Volumes = GetVolumes(instance.Name)
+	daemonset.Spec.Template.Spec.Volumes = volumes
 
 	if instance.Spec.NodeSelector != nil && len(instance.Spec.NodeSelector) > 0 {
 		daemonset.Spec.Template.Spec.NodeSelector = instance.Spec.NodeSelector
