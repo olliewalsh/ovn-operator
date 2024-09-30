@@ -424,7 +424,7 @@ func (r *OVNDBClusterReconciler) reconcileNormal(ctx context.Context, instance *
 	}
 
 	// Validate service cert secret
-	if instance.Spec.TLS.Enabled() {
+	if true {
 		hash, err := instance.Spec.TLS.ValidateCertSecret(ctx, helper, instance.Namespace)
 		if err != nil {
 			if k8s_errors.IsNotFound(err) {
@@ -593,7 +593,7 @@ func (r *OVNDBClusterReconciler) reconcileNormal(ctx context.Context, instance *
 		internalDbAddress := []string{}
 		var svcPort int32
 		scheme := "tcp"
-		if instance.Spec.TLS.Enabled() {
+		if instance.Spec.DisableNonTLSListeners {
 			scheme = "ssl"
 		}
 		for _, svc := range svcList.Items {
@@ -777,7 +777,7 @@ func (r *OVNDBClusterReconciler) reconcileServices(
 	}
 	// dbAddress will contain ovsdbserver-(nb|sb).openstack.svc or empty
 	scheme := "tcp"
-	if instance.Spec.TLS.Enabled() {
+	if instance.Spec.DisableNonTLSListeners {
 		scheme = "ssl"
 	}
 	instance.Status.DBAddress = ovndbcluster.GetDBAddress(svc, serviceName, instance.Namespace, scheme)
@@ -812,7 +812,7 @@ func (r *OVNDBClusterReconciler) generateServiceConfigMaps(
 	templateParameters["OVN_ELECTION_TIMER"] = instance.Spec.ElectionTimer
 	templateParameters["OVN_INACTIVITY_PROBE"] = instance.Spec.InactivityProbe
 	templateParameters["OVN_PROBE_INTERVAL_TO_ACTIVE"] = instance.Spec.ProbeIntervalToActive
-	templateParameters["TLS"] = instance.Spec.TLS.Enabled()
+	templateParameters["TLS"] = instance.Spec.DisableNonTLSListeners
 	templateParameters["OVNDB_CERT_PATH"] = ovn_common.OVNDbCertPath
 	templateParameters["OVNDB_KEY_PATH"] = ovn_common.OVNDbKeyPath
 	templateParameters["OVNDB_CACERT_PATH"] = ovn_common.OVNDbCaCertPath

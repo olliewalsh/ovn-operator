@@ -118,10 +118,14 @@ type OVNDBClusterSpecCore struct {
 	// If specified the IP address of this network is used as the dbAddress connection.
 	NetworkAttachment string `json:"networkAttachment"`
 
-	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Required
 	// +operator-sdk:csv:customresourcedefinitions:type=spec
 	// TLS - Parameters related to TLS
-	TLS tls.SimpleService `json:"tls,omitempty"`
+	TLS tls.SimpleService `json:"tls"`
+
+	// +kubebuilder:validation:Optional
+	// DisableNonTLSListeners
+	DisableNonTLSListeners bool `json:"disableNonTLSListeners"`
 }
 
 // OVNDBClusterStatus defines the observed state of OVNDBCluster

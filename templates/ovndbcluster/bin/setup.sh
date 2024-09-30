@@ -25,10 +25,6 @@ DB_SCHEME="ptcp"
 RAFT_PORT="{{ .RAFT_PORT }}"
 NAMESPACE="{{ .NAMESPACE }}"
 OPTS=""
-DB_NAME="OVN_Northbound"
-if [[ "${DB_TYPE}" == "sb" ]]; then
-    DB_NAME="OVN_Southbound"
-fi
 
 PODNAME=$(hostname -f | cut -d. -f1,2)
 PODIPV6=$(grep "${PODNAME}" /etc/hosts | grep ':' | cut -d$'\t' -f1)
@@ -59,15 +55,15 @@ set "$@" --db-${DB_TYPE}-cluster-local-port=${RAFT_PORT}
 set "$@" --db-${DB_TYPE}-probe-interval-to-active={{ .OVN_PROBE_INTERVAL_TO_ACTIVE }}
 set "$@" --db-${DB_TYPE}-addr=${DB_ADDR}
 set "$@" --db-${DB_TYPE}-port=${DB_PORT}
-{{- if .TLS }}
 set "$@" --ovn-${DB_TYPE}-db-ssl-key={{.OVNDB_KEY_PATH}}
 set "$@" --ovn-${DB_TYPE}-db-ssl-cert={{.OVNDB_CERT_PATH}}
 set "$@" --ovn-${DB_TYPE}-db-ssl-ca-cert={{.OVNDB_CACERT_PATH}}
+{{- if .TLS }}
 set "$@" --db-${DB_TYPE}-cluster-local-proto=ssl
 set "$@" --db-${DB_TYPE}-cluster-remote-proto=ssl
 set "$@" --db-${DB_TYPE}-create-insecure-remote=no
 {{- else }}
-set "$@" --db-${DB_TYPE}-cluster-local-proto=tcp
+set "$@" --db-${DB_TYPE}-cluster-local-proto=ssl
 set "$@" --db-${DB_TYPE}-cluster-remote-proto=tcp
 set "$@" --db-${DB_TYPE}-create-insecure-remote=yes
 {{- end }}
@@ -105,11 +101,8 @@ if [[ "$(hostname)" == "{{ .SERVICE_NAME }}-0" ]]; then
     # All following ctl invocation will use the local DB replica in the daemon
     export OVN_${DB_TYPE^^}_DAEMON=$(${CTLCMD} --pidfile --detach)
 
-{{- if .TLS }}
+
     ${CTLCMD} set-ssl {{.OVNDB_KEY_PATH}} {{.OVNDB_CERT_PATH}} {{.OVNDB_CACERT_PATH}}
-{{- else }}
-    ${CTLCMD} del-ssl
-{{- end }}
     ${CTLCMD} set-connection ${DB_SCHEME}:${DB_PORT}:${DB_ADDR}
 
     # OVN does not support setting inactivity-probe through --remote cli arg so

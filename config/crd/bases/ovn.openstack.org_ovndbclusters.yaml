@@ -57,6 +57,9 @@ spec:
                 description: DBType - NB or SB
                 pattern: ^NB|SB$
                 type: string
+              disableNonTLSListeners:
+                description: DisableNonTLSListeners
+                type: boolean
               electionTimer:
                 default: 10000
                 description: OVN Northbound and Southbound RAFT db election timer
@@ -166,6 +169,7 @@ spec:
             - containerImage
             - dbType
             - storageRequest
+            - tls
             type: object
           status:
             description: OVNDBClusterStatus defines the observed state of OVNDBCluster
