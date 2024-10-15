@@ -35,6 +35,14 @@ if [[ "$(hostname)" != "{{ .SERVICE_NAME }}-0" ]]; then
         fi
         sleep 1
     done
+else
+    # wait for other members to leave
+    while true; do
+        if SERVER_COUNT=$(ovs-appctl -t /tmp/ovn${DB_TYPE}_db.ctl cluster/status ${DB_NAME} | sed -e '1,/Servers:/d' -e '/^\s*$/d' | wc -l) && [[ $SERVER_COUNT -le 1 ]]; then
+            break
+        fi
+        sleep 1
+    done
 fi
 
 # If replicas are 0 and *all* pods are removed, we still want to retain the
