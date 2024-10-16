@@ -24,33 +24,31 @@ fi
 # There is nothing special about -0 pod, except that it's always guaranteed to
 # exist, assuming any replicas are ordered.
 if [[ "$(hostname)" != "{{ .SERVICE_NAME }}-0" ]]; then
+
     ovs-appctl -t /tmp/ovn${DB_TYPE}_db.ctl cluster/leave ${DB_NAME}
 
     # wait for when the leader confirms we left the cluster
     while true; do
         # TODO: is there a better way to detect the cluster left state?..
         STATUS=$(ovs-appctl -t /tmp/ovn${DB_TYPE}_db.ctl cluster/status ${DB_NAME} | grep Status: | awk -e '{print $2}')
-        if [ -z "$STATUS" -o "x$STATUS" = "xleft cluster" ]; then
-            break
+        if [ -z "$STATUS" -o "x$STATUS" = "xleaving cluster" -o "x$STATUS" = "xcluster member" ]; then
+            sleep 1
+            continue
         fi
-        sleep 1
+        break
     done
 else
     # wait for other members to leave
     while true; do
+        STATUS=$(ovs-appctl -t /tmp/ovn${DB_TYPE}_db.ctl cluster/status ${DB_NAME} | grep Status: | awk -e '{print $2}')
+        if [ -z "$STATUS" -o "x$STATUS" != "xcluster member" ]; then
+            break
+        fi
         if SERVER_COUNT=$(ovs-appctl -t /tmp/ovn${DB_TYPE}_db.ctl cluster/status ${DB_NAME} | sed -e '1,/Servers:/d' -e '/^\s*$/d' | wc -l) && [[ $SERVER_COUNT -le 1 ]]; then
             break
         fi
         sleep 1
     done
-fi
-
-# If replicas are 0 and *all* pods are removed, we still want to retain the
-# database with its cid/sid for when the cluster is scaled back to > 0, so
-# leaving the database file intact for -0 pod.
-if [[ "$(hostname)" != "{{ .SERVICE_NAME }}-0" ]]; then
-    # now that we left, the database file is no longer valid
-    cleanup_db_file
 fi
 
 # Stop the DB server gracefully; this will also end the pod running script.

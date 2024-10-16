@@ -83,7 +83,7 @@ set "$@" --ovn-${DB_TYPE}-logfile=/dev/null
 
 # If db file is empty, remove it; otherwise service won't start.
 # See https://issues.redhat.com/browse/FDP-689 for more details.
-if ! [ -s $DB_FILE ]; then
+if ! [ -s $DB_FILE ] || [[ "$(hostname)" != "{{ .SERVICE_NAME }}-0" ]]; then
     cleanup_db_file
 fi
 
