@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -196,7 +197,19 @@ func (r *OVNDBClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	// Handle service delete
 	if !instance.DeletionTimestamp.IsZero() {
-		return r.reconcileDelete(ctx, instance, helper)
+		// Scale statefulset down to 0 first before deleting
+		serviceName := ovnv1.ServiceNameNB
+		if instance.Spec.DBType == ovnv1.SBDBType {
+			serviceName = ovnv1.ServiceNameSB
+		}
+		sset, err := statefulset.GetStatefulSetWithName(ctx, helper, serviceName, instance.Namespace)
+		if err != nil && !k8s_errors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
+		if k8s_errors.IsNotFound(err) || sset.Status.Replicas == 0 {
+			return r.reconcileDelete(ctx, instance, helper)
+		}
+		instance.Spec.Replicas = ptr.To(int32(0))
 	}
 
 	// Handle non-deleted clusters
