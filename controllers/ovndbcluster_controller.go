@@ -197,7 +197,7 @@ func (r *OVNDBClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	// Handle service delete
 	if !instance.DeletionTimestamp.IsZero() {
-		// Scale statefulset down to 0 first before deleting
+		// Scale statefulset down to 1 first before deleting
 		serviceName := ovnv1.ServiceNameNB
 		if instance.Spec.DBType == ovnv1.SBDBType {
 			serviceName = ovnv1.ServiceNameSB
@@ -206,10 +206,10 @@ func (r *OVNDBClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if err != nil && !k8s_errors.IsNotFound(err) {
 			return ctrl.Result{}, err
 		}
-		if k8s_errors.IsNotFound(err) || sset.Status.Replicas == 0 {
+		if k8s_errors.IsNotFound(err) || sset.Status.Replicas <= 1 {
 			return r.reconcileDelete(ctx, instance, helper)
 		}
-		instance.Spec.Replicas = ptr.To(int32(0))
+		instance.Spec.Replicas = ptr.To(int32(1))
 	}
 
 	// Handle non-deleted clusters

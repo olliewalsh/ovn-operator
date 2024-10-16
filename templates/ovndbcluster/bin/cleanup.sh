@@ -24,13 +24,30 @@ fi
 # There is nothing special about -0 pod, except that it's always guaranteed to
 # exist, assuming any replicas are ordered.
 if [[ "$(hostname)" != "{{ .SERVICE_NAME }}-0" ]]; then
-    ovs-appctl -t /tmp/ovn${DB_TYPE}_db.ctl cluster/leave ${DB_NAME}
 
-    # wait for when the leader confirms we left the cluster
+    # wait for turn to leave cluster
     while true; do
-        # TODO: is there a better way to detect the cluster left state?..
-        STATUS=$(ovs-appctl -t /tmp/ovn${DB_TYPE}_db.ctl cluster/status ${DB_NAME} | grep Status: | awk -e '{print $2}')
-        if [ -z "$STATUS" -o "x$STATUS" = "xleft cluster" ]; then
+        MAX_INDEX=$(ovs-appctl -t /tmp/ovn${DB_TYPE}_db.ctl cluster/status ${DB_NAME} |
+            sed -e '1,/Servers:/d' |
+            gawk -v servicename=""{{ .SERVICE_NAME }} 'BEGIN{m=0} match($0, "(ssl|tcp):" servicename "-([[:digit:]]+)", a){ if (a[2]>m) m=a[2] }END{ print m }'
+        )
+
+        if [[ "$(hostname)" = "{{ .SERVICE_NAME }}-${MAX_INDEX}" ]]; then
+            ovs-appctl -t /tmp/ovn${DB_TYPE}_db.ctl cluster/leave ${DB_NAME}
+
+            # wait for when the leader confirms we left the cluster
+            while true; do
+                # TODO: is there a better way to detect the cluster left state?..
+                STATUS=$(ovs-appctl -t /tmp/ovn${DB_TYPE}_db.ctl cluster/status ${DB_NAME} | grep Status: | awk -e '{print $2}')
+                if [ -z "$STATUS" -o "x$STATUS" = "xleft cluster" ]; then
+                    break
+                fi
+                LEADER=$(ovs-appctl -t /tmp/ovn${DB_TYPE}_db.ctl cluster/status ${DB_NAME} | grep Leader: | awk -e '{print $2}')
+                if [ "$LEADER" = "unknown" ]; then
+                    break
+                fi
+                sleep 1
+            done
             break
         fi
         sleep 1
